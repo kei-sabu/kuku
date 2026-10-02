@@ -1065,7 +1065,8 @@
     }
     el.whoami.hidden = false;
     el.nameField.hidden = true;
-    el.whoami.innerHTML = 'Playing as <b>' + esc(playerName) + '</b>' +
+    // One span, or flex spreads 'Playing as' and the name to opposite ends.
+    el.whoami.innerHTML = '<span>Playing as <b>' + esc(playerName) + '</b></span>' +
       '<button class="linkish" type="button" id="switchBtn">Switch player</button>';
     document.getElementById('switchBtn').addEventListener('click', function () {
       if (phase === 'live' || phase === 'reveal' || phase === 'paused') return;
