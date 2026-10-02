@@ -270,6 +270,7 @@
     gap: 10px; font-size: .84rem; color: var(--ink-soft);
   }
   .whoami b { color: var(--ink); font-weight: 600; }
+  .whoami .tools { display: flex; gap: 16px; flex-wrap: wrap; justify-content: flex-end; }
   .linkish {
     background: none; border: 0; padding: 0; font: inherit; color: var(--accent);
     cursor: pointer; text-decoration: underline; text-underline-offset: 3px;
@@ -286,6 +287,26 @@
     border: 1px solid var(--line-hi); border-radius: 4px;
   }
   .namefield input::placeholder { color: var(--ink-faint); font-weight: 400; }
+
+  /* ---- the answers kept from each round ---- */
+  tr.round { cursor: pointer; }
+  tr.round:hover td { background: var(--sunk); }
+  td.caret-cell { width: 1.4em; color: var(--ink-faint); }
+  tr.detail > td { padding: 0 18px 14px; }
+  .qlist {
+    list-style: none; margin: 0; padding: 0;
+    display: flex; flex-wrap: wrap; gap: 6px;
+  }
+  .qlist li {
+    font-family: "IBM Plex Mono", monospace; font-size: .78rem;
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+    padding: 5px 9px; border-radius: 3px; border: 1px solid var(--line);
+    background: var(--sunk); color: var(--ink-soft);
+  }
+  .qlist li.ok { color: var(--good); border-color: var(--good); }
+  .qlist li.no { color: var(--bad); border-color: var(--bad); }
+  .qlist li s { opacity: .8; margin-left: .4em; }
+  .qlist li em { font-style: normal; opacity: .7; margin-left: .4em; }
 
   /* ---- progress ---- */
   .progress {
@@ -499,7 +520,7 @@
 
     <div class="scroller">
       <table>
-        <thead><tr><th>When</th><th>Level</th><th>Clock</th><th>Score</th><th>Avg time</th></tr></thead>
+        <thead><tr><th></th><th>When</th><th>Level</th><th>Clock</th><th>Score</th><th>Avg time</th></tr></thead>
         <tbody id="pBody"></tbody>
       </table>
     </div>
@@ -597,6 +618,7 @@
     chartNote: document.getElementById('chartNote'),
     bars: document.getElementById('bars'),
     pBody: document.getElementById('pBody'),
+    pTable: document.getElementById('pBody').parentNode,
     standings: document.getElementById('standings'),
     sBody: document.getElementById('sBody'),
     equation: document.getElementById('equation'),
@@ -908,11 +930,13 @@
       correct++; streak++;
       el.verdict.className = 'verdict good';
       el.verdict.textContent = streak >= 3 ? 'Right — ' + streak + ' in a row' : 'Right';
+      play('right');
     } else {
       streak = 0;
       el.verdict.className = 'verdict bad';
       el.verdict.textContent = skipped ? 'Skipped'
         : (given === null ? 'Out of time' : 'Not quite');
+      play(skipped ? 'skip' : 'wrong');
     }
     el.score.textContent = String(correct);
     el.streak.textContent = String(streak);
@@ -953,7 +977,15 @@
     var isBest = correct > best;
     pushRun({
       t: Date.now(), lvl: level, secs: limit / 1000,
-      correct: correct, total: ROUND, avgMs: Math.round(totalMs / ROUND)
+      correct: correct, total: ROUND, avgMs: Math.round(totalMs / ROUND),
+      // every question of the round, so a past round can be reopened
+      qs: log.map(function (r) {
+        return {
+          q: r.q.text, a: r.q.answer,
+          g: (r.given === null ? null : r.given),
+          ok: r.hit, sk: !!r.skipped, ms: Math.round(r.ms)
+        };
+      })
     });
     best = loadBest();
     el.rHint.textContent = (isBest ? 'New best on ' : 'Best on ') + setting() +
@@ -992,12 +1024,59 @@
       }
       setPlayer(typed);
     }
+    unlockAudio();
     startRound();
   });
   el.nameInput.addEventListener('keydown', function (ev) {
     if (ev.key === 'Enter') { ev.preventDefault(); el.startBtn.click(); }
   });
-  el.againBtn.addEventListener('click', startRound);
+  el.againBtn.addEventListener('click', function () { unlockAudio(); startRound(); });
+
+  /* ================= sound ================= */
+  // Synthesised, so there is nothing to download and it still works offline.
+  var audioCtx = null, soundOn = true;
+
+  var SFX = {
+    right: [{ f: 659.25, at: 0,     d: 0.09, v: 0.16 },
+            { f: 987.77, at: 0.075, d: 0.13, v: 0.14 }],
+    wrong: [{ f: 196.00, at: 0,     d: 0.18, v: 0.18, type: 'triangle' },
+            { f: 146.83, at: 0.10,  d: 0.22, v: 0.15, type: 'triangle' }],
+    skip:  [{ f: 440.00, at: 0,     d: 0.06, v: 0.08, type: 'triangle' }]
+  };
+
+  // iOS will not let a page make noise until a real gesture has happened,
+  // so the context is created on the first tap of Start and kept.
+  function unlockAudio() {
+    if (!audioCtx) {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      try { audioCtx = new AC(); } catch (e) { audioCtx = null; return; }
+    }
+    if (audioCtx.state === 'suspended') { audioCtx.resume()['catch'](function () {}); }
+  }
+
+  function play(name) {
+    if (!soundOn || !audioCtx || audioCtx.state !== 'running') return;
+    var t0 = audioCtx.currentTime;
+    SFX[name].forEach(function (n) {
+      var osc = audioCtx.createOscillator(), gain = audioCtx.createGain();
+      osc.type = n.type || 'sine';
+      osc.frequency.setValueAtTime(n.f, t0 + n.at);
+      gain.gain.setValueAtTime(0.0001, t0 + n.at);
+      gain.gain.exponentialRampToValueAtTime(n.v, t0 + n.at + 0.012);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + n.at + n.d);
+      osc.connect(gain); gain.connect(audioCtx.destination);
+      osc.start(t0 + n.at);
+      osc.stop(t0 + n.at + n.d + 0.02);
+    });
+  }
+
+  function toggleSound() {
+    soundOn = !soundOn;
+    savePref('fss.sound', soundOn ? '1' : '0');
+    renderWho();
+    if (soundOn) { unlockAudio(); play('right'); }   // so you hear what you turned on
+  }
 
   /* ---- best score, per viewer, per clock ---- */
   function savePref(k, v) {
@@ -1058,16 +1137,21 @@
   }
 
   function renderWho() {
-    if (!playerName) {
-      el.whoami.hidden = true;
-      el.nameField.hidden = false;
-      return;
-    }
+    // Each half is one span, or flex spreads the words to opposite ends.
     el.whoami.hidden = false;
-    el.nameField.hidden = true;
-    // One span, or flex spreads 'Playing as' and the name to opposite ends.
-    el.whoami.innerHTML = '<span>Playing as <b>' + esc(playerName) + '</b></span>' +
-      '<button class="linkish" type="button" id="switchBtn">Switch player</button>';
+    el.nameField.hidden = !!playerName;
+    el.whoami.innerHTML =
+      '<span>' + (playerName ? 'Playing as <b>' + esc(playerName) + '</b>' : '') + '</span>' +
+      '<span class="tools">' +
+        '<button class="linkish" type="button" id="soundBtn">' +
+          (soundOn ? 'Sound on' : 'Sound off') + '</button>' +
+        (playerName
+          ? '<button class="linkish" type="button" id="switchBtn">Switch player</button>' : '') +
+      '</span>';
+
+    document.getElementById('soundBtn').addEventListener('click', toggleSound);
+
+    if (!playerName) return;
     document.getElementById('switchBtn').addEventListener('click', function () {
       if (phase === 'live' || phase === 'reveal' || phase === 'paused') return;
       playerName = ''; myRuns = []; played = 0;
@@ -1169,17 +1253,48 @@
     el.chartNote.textContent = 'Oldest on the left. Only rounds on ' + setting() + ' are plotted.';
   }
 
+  function answerList(r) {
+    if (!r.qs || !r.qs.length) {
+      return '<p class="chartnote">The answers were not kept for this round.</p>';
+    }
+    return '<ul class="qlist">' + r.qs.map(function (x) {
+      var cls = x.ok ? 'ok' : 'no';
+      var tail = x.sk ? '<em>skipped</em>'
+        : (x.g === null ? '<em>no answer</em>'
+          : (x.ok ? '' : '<s>' + x.g + '</s>'));
+      return '<li class="' + cls + '">' + esc(x.q) + ' = ' + x.a + tail + '</li>';
+    }).join('') + '</ul>';
+  }
+
   function renderRecent(list) {
-    el.pBody.innerHTML = list.length ? list.map(function (r) {
-      return '<tr>' +
+    if (!list.length) {
+      el.pBody.innerHTML = '<tr><td colspan="6">Nothing yet. Finish a round and it lands here.</td></tr>';
+      return;
+    }
+    el.pBody.innerHTML = list.map(function (r, i) {
+      return '<tr class="round" data-row="' + i + '">' +
+        '<td class="caret-cell">\u203A</td>' +
         '<td>' + esc(stamp(r.t)) + '</td>' +
         '<td>' + esc((LEVELS[r.lvl] || { name: r.lvl }).name) + '</td>' +
         '<td class="num">' + r.secs + 's</td>' +
         '<td class="num">' + r.correct + '/' + r.total + '</td>' +
         '<td class="num">' + (r.avgMs / 1000).toFixed(1) + 's</td>' +
+        '</tr>' +
+        '<tr class="detail" data-detail="' + i + '" hidden>' +
+          '<td colspan="6">' + answerList(r) + '</td>' +
         '</tr>';
-    }).join('') : '<tr><td colspan="5">Nothing yet. Finish a round and it lands here.</td></tr>';
+    }).join('');
   }
+
+  // One delegated listener: the rows are rebuilt on every render.
+  el.pBody.addEventListener('click', function (ev) {
+    var row = ev.target.closest ? ev.target.closest('tr.round') : null;
+    if (!row) return;
+    var detail = el.pBody.querySelector('tr[data-detail="' + row.dataset.row + '"]');
+    if (!detail) return;
+    detail.hidden = !detail.hidden;
+    row.firstChild.textContent = detail.hidden ? '\u203A' : '\u02C5';
+  });
 
   function renderStandings() {
     if (!roster.length) { el.standings.hidden = true; return; }
@@ -1247,6 +1362,7 @@
     var tier = (saved && saved.level) || '';
     if (!tier) { try { tier = localStorage.getItem('fss.level') || ''; } catch (e) {} }
     if (TIERS.indexOf(tier) !== -1) level = tier;
+    try { soundOn = localStorage.getItem('fss.sound') !== '0'; } catch (e) {}
     markClock();
     markLevel();
     best = loadBest();
