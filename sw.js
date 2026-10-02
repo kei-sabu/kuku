@@ -1,5 +1,5 @@
 /* Offline shell for Sums Against the Clock. */
-var VERSION = 'sums-v5';
+var VERSION = 'sums-v6';
 var FONTS = VERSION + '-fonts';
 var SHELL = [
   './', './index.html', './manifest.webmanifest',

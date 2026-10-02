@@ -305,8 +305,10 @@
   }
   .qlist li.ok { color: var(--good); border-color: var(--good); }
   .qlist li.no { color: var(--bad); border-color: var(--bad); }
-  .qlist li s { opacity: .8; margin-left: .4em; }
-  .qlist li em { font-style: normal; opacity: .7; margin-left: .4em; }
+  .qlist li em {
+    font-style: normal; margin-left: .55em; opacity: .75;
+    font-family: Archivo, sans-serif; font-size: .92em;
+  }
 
   /* ---- progress ---- */
   .progress {
@@ -1260,8 +1262,8 @@
     return '<ul class="qlist">' + r.qs.map(function (x) {
       var cls = x.ok ? 'ok' : 'no';
       var tail = x.sk ? '<em>skipped</em>'
-        : (x.g === null ? '<em>no answer</em>'
-          : (x.ok ? '' : '<s>' + x.g + '</s>'));
+        : (x.g === null ? '<em>timed out</em>'
+          : (x.ok ? '' : '<em>you said ' + x.g + '</em>'));
       return '<li class="' + cls + '">' + esc(x.q) + ' = ' + x.a + tail + '</li>';
     }).join('') + '</ul>';
   }
