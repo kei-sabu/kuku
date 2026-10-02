@@ -243,6 +243,15 @@
   .key.enter:hover:not(:disabled) { filter: brightness(1.08); background: var(--accent); }
   .pad[data-locked="true"] .key { opacity: .38; pointer-events: none; }
 
+  /* ---- mid-round controls ---- */
+  .duringplay, .confirmrow {
+    display: flex; justify-content: center; align-items: baseline;
+    flex-wrap: wrap; gap: 6px 20px;
+    padding: 0 18px 18px; font-size: .84rem;
+  }
+  .confirmrow span { color: var(--ink-soft); font-weight: 600; }
+  .linkish.danger { color: var(--bad); }
+
   /* ---- start / footer controls ---- */
   .launch { padding: 0 18px 18px; display: flex; flex-direction: column; gap: 9px; }
   .primary {
@@ -414,6 +423,17 @@
 
       <div class="pad" id="pad" data-locked="true"></div>
 
+      <div class="duringplay" id="during" hidden>
+        <button class="linkish" type="button" id="skipBtn">Skip this one</button>
+        <button class="linkish danger" type="button" id="endBtn">End round</button>
+      </div>
+
+      <div class="confirmrow" id="confirmEnd" hidden>
+        <span>Discard this round?</span>
+        <button class="linkish danger" type="button" id="endYes">Discard it</button>
+        <button class="linkish" type="button" id="endNo">Keep playing</button>
+      </div>
+
       <div class="launch" id="launch">
         <div class="namefield" id="nameField">
           <label for="playerName">Your name</label>
@@ -584,6 +604,12 @@
     verdict: document.getElementById('verdict'),
     pad: document.getElementById('pad'),
     launch: document.getElementById('launch'),
+    during: document.getElementById('during'),
+    skipBtn: document.getElementById('skipBtn'),
+    endBtn: document.getElementById('endBtn'),
+    confirmEnd: document.getElementById('confirmEnd'),
+    endYes: document.getElementById('endYes'),
+    endNo: document.getElementById('endNo'),
     startBtn: document.getElementById('startBtn'),
     hint: document.getElementById('hint'),
     againBtn: document.getElementById('againBtn'),
@@ -597,6 +623,7 @@
   var phase = 'idle';           // idle | live | reveal | done
   var queue = [], qi = 0, log = [], entry = '', streak = 0, best = 0, correct = 0;
   var started = 0, raf = 0, holdTimer = 0;
+  var pausedLeft = 0, resumeTo = 'live';   // set while the discard prompt is up
 
   function rnd(lo, hi) { return lo + Math.floor(Math.random() * (hi - lo + 1)); }
 
@@ -649,7 +676,7 @@
     b.setAttribute('aria-pressed', 'true');
     b.innerHTML = '<span class="glyph">' + OPS[key].glyph + '</span>' + OPS[key].name;
     b.addEventListener('click', function () {
-      if (phase === 'live' || phase === 'reveal') return;
+      if (phase === 'live' || phase === 'reveal' || phase === 'paused') return;
       if (enabled[key] && activeOps().length === 1) return;   // keep at least one
       enabled[key] = !enabled[key];
       b.setAttribute('aria-pressed', String(enabled[key]));
@@ -666,7 +693,7 @@
     b.setAttribute('aria-pressed', String(secs * 1000 === limit));
     b.innerHTML = '<span class="glyph">' + secs + '</span>seconds';
     b.addEventListener('click', function () {
-      if (phase === 'live' || phase === 'reveal') return;
+      if (phase === 'live' || phase === 'reveal' || phase === 'paused') return;
       setLimit(secs * 1000);
     });
     el.clocks.appendChild(b);
@@ -680,7 +707,7 @@
     b.setAttribute('aria-pressed', String(key === level));
     b.textContent = LEVELS[key].name;
     b.addEventListener('click', function () {
-      if (phase === 'live' || phase === 'reveal') return;
+      if (phase === 'live' || phase === 'reveal' || phase === 'paused') return;
       setLevel(key);
     });
     el.levels.appendChild(b);
@@ -746,10 +773,18 @@
   }
 
   document.addEventListener('keydown', function (ev) {
+    if (phase === 'paused') {
+      if (ev.key === 'Escape') { resumeRound(); ev.preventDefault(); }
+      return;
+    }
+    if (ev.key === 'Escape' && (phase === 'live' || phase === 'reveal')) {
+      askEnd(); ev.preventDefault(); return;
+    }
     if (phase !== 'live') return;
     if (ev.key >= '0' && ev.key <= '9') { press(ev.key); ev.preventDefault(); }
     else if (ev.key === 'Backspace') { press('del'); ev.preventDefault(); }
     else if (ev.key === 'Enter') { press('enter'); ev.preventDefault(); }
+    else if (ev.key === 's' || ev.key === 'S') { skipQuestion(); ev.preventDefault(); }
   });
 
   /* ---- round flow ---- */
@@ -765,6 +800,8 @@
     queue = buildRound(); qi = 0; log = []; streak = 0; correct = 0;
     el.results.hidden = true; el.play.hidden = false;
     el.launch.hidden = true;
+    el.during.hidden = false;
+    el.confirmEnd.hidden = true;
     el.pad.dataset.locked = 'false';
     lockChips(true);
     el.score.textContent = '0';
@@ -798,13 +835,74 @@
     resolve(parseInt(entry, 10));
   }
 
-  function resolve(given) {
+  // Give up on this question: no credit, but the answer is still shown.
+  function skipQuestion() {
+    if (phase !== 'live') return;
+    resolve(null, true);
+  }
+
+  // Ending a round is destructive, so the clock stops and we ask first.
+  function askEnd() {
+    if (phase === 'live') {
+      cancelAnimationFrame(raf);
+      pausedLeft = Math.max(0, limit - (performance.now() - started));
+      resumeTo = 'live';
+    } else if (phase === 'reveal') {
+      clearTimeout(holdTimer);
+      resumeTo = 'reveal';
+    } else {
+      return;
+    }
+    phase = 'paused';
+    el.pad.dataset.locked = 'true';
+    el.during.hidden = true;
+    el.confirmEnd.hidden = false;
+  }
+
+  function resumeRound() {
+    if (phase !== 'paused') return;
+    el.confirmEnd.hidden = true;
+    el.during.hidden = false;
+    el.pad.dataset.locked = 'false';
+    if (resumeTo === 'live') {
+      phase = 'live';
+      started = performance.now() - (limit - pausedLeft);
+      tick();
+    } else {
+      phase = 'reveal';
+      holdTimer = setTimeout(function () {
+        qi++;
+        if (qi < ROUND) nextQuestion(); else finish();
+      }, 500);
+    }
+  }
+
+  // Abandoned rounds are discarded outright. Scoring a round stopped at
+  // question three out of ten would poison the progress chart.
+  function abandonRound() {
+    cancelAnimationFrame(raf);
+    clearTimeout(holdTimer);
+    el.confirmEnd.hidden = true;
+    el.during.hidden = true;
+    lockChips(false);
+    resetToIdle();
+    refreshHint();
+    el.verdict.className = 'verdict';
+    el.verdict.textContent = 'Round discarded. Nothing was recorded.';
+  }
+
+  el.skipBtn.addEventListener('click', skipQuestion);
+  el.endBtn.addEventListener('click', askEnd);
+  el.endNo.addEventListener('click', resumeRound);
+  el.endYes.addEventListener('click', abandonRound);
+
+  function resolve(given, skipped) {
     cancelAnimationFrame(raf);
     phase = 'reveal';
     var q = queue[qi];
     var ms = Math.min(limit, performance.now() - started);
     var hit = given === q.answer;
-    log.push({ q: q, given: given, hit: hit, ms: ms });
+    log.push({ q: q, given: given, hit: hit, ms: ms, skipped: !!skipped });
 
     if (hit) {
       correct++; streak++;
@@ -813,7 +911,8 @@
     } else {
       streak = 0;
       el.verdict.className = 'verdict bad';
-      el.verdict.textContent = given === null ? 'Out of time' : 'Not quite';
+      el.verdict.textContent = skipped ? 'Skipped'
+        : (given === null ? 'Out of time' : 'Not quite');
     }
     el.score.textContent = String(correct);
     el.streak.textContent = String(streak);
@@ -831,6 +930,8 @@
 
   function finish() {
     phase = 'done';
+    el.during.hidden = true;
+    el.confirmEnd.hidden = true;
     lockChips(false);
     var totalMs = log.reduce(function (s, r) { return s + r.ms; }, 0);
     el.rScore.textContent = correct + '/' + ROUND;
@@ -841,7 +942,8 @@
       return '<tr class="' + (r.hit ? 'hit' : 'miss') + '">' +
         '<td>' + (i + 1) + '</td>' +
         '<td class="q">' + r.q.text + '</td>' +
-        '<td class="num mine">' + (r.given === null ? '—' : r.given) + '</td>' +
+        '<td class="num mine">' +
+          (r.skipped ? 'skip' : (r.given === null ? '—' : r.given)) + '</td>' +
         '<td class="num">' + r.q.answer + '</td>' +
         '<td class="num">' + (r.ms / 1000).toFixed(1) + 's</td>' +
         '<td class="mark ' + (r.hit ? 'hit' : 'miss') + '">' + (r.hit ? '✓' : '✗') + '</td>' +
@@ -869,6 +971,8 @@
     el.results.hidden = true;
     el.play.hidden = false;
     el.launch.hidden = false;
+    el.during.hidden = true;
+    el.confirmEnd.hidden = true;
     el.pad.dataset.locked = 'true';
     el.qCount.textContent = 'Ready';
     el.streak.textContent = '0';
@@ -964,7 +1068,7 @@
     el.whoami.innerHTML = 'Playing as <b>' + esc(playerName) + '</b>' +
       '<button class="linkish" type="button" id="switchBtn">Switch player</button>';
     document.getElementById('switchBtn').addEventListener('click', function () {
-      if (phase === 'live' || phase === 'reveal') return;
+      if (phase === 'live' || phase === 'reveal' || phase === 'paused') return;
       playerName = ''; myRuns = []; played = 0;
       savePref('fss.name', '');
       best = 0;
